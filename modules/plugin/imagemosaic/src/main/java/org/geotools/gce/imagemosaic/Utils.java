@@ -930,7 +930,13 @@ public class Utils {
         return retValue;
     }
 
-    private static Path changeExtension(Path path, String extension){
+    /**
+     *  Changes the extension of a given {@link Path}. Returns null if the path is a directory
+     * @param path
+     * @param extension
+     * @return
+     */
+    public static Path changeExtension(Path path, String extension){
     String fileName = path.getFileName().toString();
     int lastIndex = fileName.lastIndexOf('.');
     if(lastIndex > -1){

@@ -23,17 +23,15 @@ import static org.apache.commons.io.filefilter.FileFilterUtils.notFileFilter;
 import static org.apache.commons.io.filefilter.FileFilterUtils.suffixFileFilter;
 
 import java.awt.*;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FilenameFilter;
-import java.io.IOException;
-import java.io.Serializable;
+import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.media.jai.Interpolation;
@@ -390,20 +388,14 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
             }
 
             Path sourcePath = Utils.checkSource(source, hints);
-            URL sourceURL = null;
             //FIXME refactor to use sourcePath
-            if(sourcePath != null){
-                sourceURL = URLs.fileToUrl(sourcePath.toFile());
-
-            }
-            if (sourceURL == null) {
+            if (sourcePath == null) {
                 return false;
             }
-            if (source instanceof File) {
-                File file = (File) source;
-                if (!file.exists()) {
-                    return false; // file does not exist
-                }
+//            URL sourceURL = URLs.fileToUrl(sourcePath.toFile());
+
+            if (!Files.exists(sourcePath)) {
+                return false; // file does not exist
             }
 
             //
@@ -414,18 +406,14 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
             CoordinateReferenceSystem crs = null;
             boolean shapefile = true;
             try {
-                final File sourceF = URLs.urlToFile(sourceURL);
-                if (FilenameUtils.getName(sourceF.getAbsolutePath())
+                if (FilenameUtils.getName(sourcePath.toAbsolutePath().toString())
                         .equalsIgnoreCase("datastore.properties")) {
                     shapefile = false;
                     // load spi anche check it
                     // read the properties file
                     final Properties properties = new Properties();
-                    final FileInputStream stream = new FileInputStream(sourceF);
-                    try {
+                    try (InputStream stream = Files.newInputStream(sourcePath)){
                         properties.load(stream);
-                    } finally {
-                        IOUtils.closeQuietly(stream);
                     }
 
                     // SPI
@@ -454,20 +442,20 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
                     // H2 workadound
                     if (Utils.isH2Store(spi)) {
                         Utils.fixH2DatabaseLocation(
-                                params, URLs.fileToUrl(sourceF.getParentFile()).toExternalForm());
+                                params, URLs.fileToUrl(sourcePath.toFile().getParentFile()).toExternalForm());
                     }
 
                     tileIndexStore = spi.createDataStore(params);
                     if (tileIndexStore == null) return false;
 
                 } else {
-                    URL testPropertiesUrl = DataUtilities.changeUrlExt(sourceURL, "properties");
-                    File testFile = URLs.urlToFile(testPropertiesUrl);
-                    if (!testFile.exists()) {
+                    Path testPropertiesPath = Utils.changeExtension(sourcePath, "properties");
+                    if (!Files.exists(testPropertiesPath)) {
                         return false;
                     }
 
-                    ShapefileDataStore store = new ShapefileDataStore(sourceURL);
+                    //FIXME need a ShapeFileDataStore which accepts a Path
+                    ShapefileDataStore store = new ShapefileDataStore(URLs.fileToUrl(sourcePath.toFile()));
                     store.setTimeZone(Utils.UTC_TIME_ZONE);
                     tileIndexStore = store;
                 }
@@ -475,36 +463,49 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
                 //
                 // Now look for the properties file and try to parse relevant fields
                 //
-                URL propsUrl = null;
-                if (shapefile) propsUrl = DataUtilities.changeUrlExt(sourceURL, "properties");
+                Path propsUrl = null;
+                if (shapefile) {
+                    propsUrl = Utils.changeExtension(sourcePath, "properties");
+                }
                 else {
                     //
                     // do we have a datastore properties file? It will preempt on the shapefile
                     //
-                    final File parent = URLs.urlToFile(sourceURL).getParentFile();
+                    final Path parent = sourcePath.getParent();
 
                     // this can be used to look for properties files that do NOT define a datastore
-                    final File[] properties =
-                            parent.listFiles(
-                                    (FilenameFilter)
-                                            and(
-                                                    notFileFilter(
-                                                            nameFileFilter("indexer.properties")),
-                                                    and(
-                                                            notFileFilter(
-                                                                    nameFileFilter(
-                                                                            "datastore.properties")),
-                                                            makeFileOnly(
-                                                                    suffixFileFilter(
-                                                                            ".properties")))));
+//                    final File[] properties =
+//                            parent.listFiles(
+//                                    (FilenameFilter)
+//                                            and(
+//                                                    notFileFilter(
+//                                                            nameFileFilter("indexer.properties")),
+//                                                    and(
+//                                                            notFileFilter(
+//                                                                    nameFileFilter(
+//                                                                            "datastore.properties")),
+//                                                            makeFileOnly(
+//                                                                    suffixFileFilter(
+//                                                                            ".properties")))));
+
+                    Predicate<Path> notIndexer = path -> !path.getFileName().toString().equals("indexer.properties");
+                    Predicate<Path> notDatastore = path -> !path.getFileName().toString().equals("datastore.properties");
+                    Predicate<Path> isPropertiesFile = path -> path.getFileName().toString().endsWith(".properties");
+
+                    final Path[] properties =
+                            Files.list(parent)
+                            .filter(notIndexer)
+                            .filter(notDatastore)
+                            .filter(isPropertiesFile)
+                            .toArray(Path[]::new);
 
                     // do we have a valid datastore + mosaic properties pair?
                     if (properties != null) {
-                        for (File propFile : properties) {
+                        for (Path propFile : properties) {
                             if (Utils.checkFileReadable(propFile)
-                                    && Utils.loadMosaicProperties(URLs.fileToUrl(propFile))
+                                    && Utils.loadMosaicProperties(propFile)
                                             != null) {
-                                propsUrl = URLs.fileToUrl(propFile);
+                                propsUrl = propFile;
                                 break;
                             }
                         }
@@ -512,9 +513,13 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
                 }
 
                 // get the properties file
-                if (propsUrl == null) return false;
+                if (propsUrl == null) {
+                    return false;
+                }
                 final MosaicConfigurationBean configuration = Utils.loadMosaicProperties(propsUrl);
-                if (configuration == null) return false;
+                if (configuration == null) {
+                    return false;
+                }
 
                 CatalogConfigurationBean catalogBean = configuration.getCatalogConfigurationBean();
                 // we need the type name with a DB to pick up the right table
