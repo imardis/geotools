@@ -573,6 +573,8 @@ public class IndexerUtils {
         return defaultIndexer;
     }
 
+    //FIXME will eventually be redundant
+    @Deprecated
     public static Indexer initializeIndexer(ParametersType params, File parent) {
         File indexerFile = new File(parent, INDEXER_XML);
         Indexer indexer = null;
@@ -597,6 +599,36 @@ public class IndexerUtils {
         }
         if (indexer != null) {
             indexer.setIndexerFile(indexerFile);
+        }
+        return indexer;
+    }
+
+    public static Indexer initializeIndexer(ParametersType params, Path parent) {
+        Path indexerPath = parent.resolve( INDEXER_XML);
+        Indexer indexer = null;
+        if (Utils.checkFileReadable(indexerPath)) {
+            try {
+                indexer = Utils.unmarshal(indexerPath);
+                if (indexer != null) {
+                    copyDefaultParams(params, indexer);
+                }
+            } catch (JAXBException e) {
+                LOGGER.log(Level.WARNING, e.getMessage(), e);
+            }
+        } else {
+            // Backward compatible with old indexing
+            indexerPath = parent.resolve(INDEXER_PROPERTIES);
+            if (Utils.checkFileReadable(indexerPath)) {
+                // load it and parse it
+                final Properties props =
+                        Utils.loadPropertiesFromPath(indexerPath);
+                indexer = createIndexer(props, params);
+            }
+        }
+        if (indexer != null) {
+            //fixme indexerfile needs a indexerfile removing
+            indexer.setIndexerFile(indexerPath.toFile());
+            indexer.setIndexerPath(indexerPath);
         }
         return indexer;
     }

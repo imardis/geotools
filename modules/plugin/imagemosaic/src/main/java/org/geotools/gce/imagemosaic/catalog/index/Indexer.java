@@ -17,6 +17,7 @@
 package org.geotools.gce.imagemosaic.catalog.index;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import javax.xml.bind.annotation.XmlAccessType;
@@ -142,6 +143,9 @@ public class Indexer {
     protected ParametersType parameters;
 
     @XmlTransient private File indexerFile;
+
+    @XmlTransient private Path indexerPath;
+
 
     /**
      * Gets the value of the schemas property.
@@ -742,6 +746,14 @@ public class Indexer {
 
     public void setIndexerFile(File indexerFile) {
         this.indexerFile = indexerFile;
+    }
+
+    public void setIndexerPath(Path indexerPath) {
+        this.indexerPath = indexerPath;
+    }
+
+    public Path getIndexerPath() {
+        return indexerPath;
     }
 
     /**

@@ -49,6 +49,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Predicate;
 import java.util.logging.Level;
@@ -432,7 +433,7 @@ public class Utils {
      *     in which case the reason should be logged to the logger.
      */
     static boolean createMosaic(
-            final String location,
+            final Path location,
             final String indexName,
             final String wildcard,
             final boolean absolutePath,
@@ -445,11 +446,12 @@ public class Utils {
                 hints); // retain hints as this may contain an instance of an ImageMosaicReader
         List<Parameter> parameterList = configuration.getIndexer().getParameters().getParameter();
 
+        //FIXME check indexer doesnt need any changes
         IndexerUtils.setParam(parameterList, Prop.ABSOLUTE_PATH, Boolean.toString(absolutePath));
-        IndexerUtils.setParam(parameterList, Prop.ROOT_MOSAIC_DIR, location);
+        IndexerUtils.setParam(parameterList, Prop.ROOT_MOSAIC_DIR, location.toString());
         IndexerUtils.setParam(parameterList, Prop.INDEX_NAME, indexName);
         IndexerUtils.setParam(parameterList, Prop.WILDCARD, wildcard);
-        IndexerUtils.setParam(parameterList, Prop.INDEXING_DIRECTORIES, location);
+        IndexerUtils.setParam(parameterList, Prop.INDEXING_DIRECTORIES, location.toString());
 
         // create the builder
         // final ImageMosaicWalker catalogBuilder = new ImageMosaicWalker(configuration);
@@ -557,14 +559,18 @@ public class Utils {
     }
 
     static MosaicConfigurationBean loadMosaicProperties(final URL sourceURL) {
-        return loadMosaicProperties(sourceURL, null);
+        return loadMosaicProperties(URLs.urlToFile(sourceURL).toPath(), null);
+    }
+
+    static MosaicConfigurationBean loadMosaicProperties(final Path sourcePath) {
+        return loadMosaicProperties(sourcePath, null);
     }
 
     private static MosaicConfigurationBean loadMosaicProperties(
-            final URL sourceURL, final Set<String> ignorePropertiesSet) {
+            final Path sourcePath, final Set<String> ignorePropertiesSet) {
 
         if (LOGGER.isLoggable(Level.FINE)) {
-            LOGGER.log(Level.FINE, "Trying to load properties file from URL:" + sourceURL);
+            LOGGER.log(Level.FINE, "Trying to load properties file from URL:" + sourcePath);
         }
 
         // ret value
@@ -576,21 +582,19 @@ public class Utils {
         //
         // load the properties file
         //
-        URL propsURL = sourceURL;
-        if (!sourceURL.toExternalForm().endsWith(".properties")) {
-            propsURL = DataUtilities.changeUrlExt(sourceURL, "properties");
-            if (propsURL.getProtocol().equals("file")) {
-                final File sourceFile = URLs.urlToFile(propsURL);
-                if (!sourceFile.exists()) {
-                    if (LOGGER.isLoggable(Level.INFO)) {
-                        LOGGER.info("properties file doesn't exist");
-                    }
-                    return null;
+        Path propsURL = sourcePath;
+        if (!sourcePath.getFileName().toString().endsWith(".properties")) {
+            propsURL = changeExtension(sourcePath, "properties");
+            if (propsURL == null || !Files.exists(propsURL)) {
+                if (LOGGER.isLoggable(Level.INFO)) {
+                    LOGGER.info("properties file doesn't exist");
                 }
+                return null;
             }
         }
 
-        final Properties properties = CoverageUtilities.loadPropertiesFromURL(propsURL);
+
+        final Properties properties = loadPropertiesFromPath(propsURL);
         if (properties == null) {
             if (LOGGER.isLoggable(Level.INFO)) LOGGER.info("Unable to load mosaic properties file");
             return null;
@@ -901,7 +905,7 @@ public class Utils {
         }
 
         // Also initialize the indexer here, since it will be needed later on.
-        File mosaicParentFolder = URLs.urlToFile(sourceURL).getParentFile();
+        Path mosaicParentFolder = sourcePath.getParent();
         Indexer indexer = loadIndexer(mosaicParentFolder);
 
         if (indexer != null) {
@@ -926,11 +930,21 @@ public class Utils {
         return retValue;
     }
 
+    private static Path changeExtension(Path path, String extension){
+    String fileName = path.getFileName().toString();
+    int lastIndex = fileName.lastIndexOf('.');
+    if(lastIndex > -1){
+        String name = fileName.substring(0,lastIndex);
+        return path.resolveSibling(name+"."+extension);
+    }
+    return null;
+}
+
     private static CoordinateReferenceSystem decodeSrs(String property) throws FactoryException {
         return CRS.decode(property, true);
     }
 
-    private static Indexer loadIndexer(File parentFolder) {
+    private static Indexer loadIndexer(Path parentFolder) {
         Indexer defaultIndexer = IndexerUtils.createDefaultIndexer();
         Indexer configuredIndexer =
                 IndexerUtils.initializeIndexer(defaultIndexer.getParameters(), parentFolder);
@@ -1396,10 +1410,9 @@ public class Utils {
             if (Files.isDirectory(sourcePath)) {
                 // it's a DIRECTORY, let's look for a possible properties files
                 // that we want to load
-                final String locationPath = sourcePath.toString();
-                final Path directory = sourcePath;
+                final Path mosaicDirectory = sourcePath;
                 final String defaultIndexName = getDefaultIndexName(sourcePath);
-                boolean datastoreFound = false;
+                boolean datastoreFound;
                 boolean buildMosaic = false;
 
                 //
@@ -1432,10 +1445,7 @@ public class Utils {
                     for (Path propFile : properties)
                         if (checkFileReadable(propFile)) {
                             // load it
-                            // fixme refactor loadMosaicProperties
-                            if (null
-                                    != Utils.loadMosaicProperties(
-                                            URLs.fileToUrl(propFile.toFile()))) {
+                            if (null != Utils.loadMosaicProperties(propFile)) {
                                 found = true;
                                 break;
                             }
@@ -1460,12 +1470,12 @@ public class Utils {
                     for (Path propFile : properties) {
 
                         // load properties
-                        if (null == Utils.loadMosaicProperties(URLs.fileToUrl(propFile.toFile())))
+                        if (null == Utils.loadMosaicProperties(propFile))
                             continue;
 
                         // look for a couple shapefile, mosaic properties file
                         shapeFile =
-                                directory.resolve(
+                                mosaicDirectory.resolve(
                                         FilenameUtils.getBaseName(propFile.getFileName().toString())
                                                 + ".shp");
                         if (!checkFileReadable(shapeFile) && checkFileReadable(propFile)) {
@@ -1488,7 +1498,6 @@ public class Utils {
                     // happens
 
                     // preliminary checks
-                    final Path mosaicDirectory = directory;
                     if (!Files.exists(mosaicDirectory)
                             || Files.isRegularFile(mosaicDirectory)
                             || !Files.isWritable(mosaicDirectory)) {
@@ -1497,7 +1506,7 @@ public class Utils {
                                     Level.SEVERE,
                                     "Unable to create the mosaic, check the location:\n"
                                             + "location is:"
-                                            + locationPath
+                                            + mosaicDirectory
                                             + "\n"
                                             + "location exists:"
                                             + Files.exists(mosaicDirectory)
@@ -1520,17 +1529,17 @@ public class Utils {
 
                     // actual creation
                     createMosaic(
-                            locationPath,
+                            mosaicDirectory,
                             defaultIndexName,
                             DEFAULT_WILCARD,
                             DEFAULT_PATH_BEHAVIOR,
                             hints);
 
                     // check that the mosaic properties file was created
-                    final Path propertiesFile = directory.resolve(defaultIndexName + ".properties");
+                    final Path propertiesFile = mosaicDirectory.resolve(defaultIndexName + ".properties");
                     if (!checkFileReadable(propertiesFile)) {
                         // retrieve a null so that we shows that a problem occurred
-                        if (!checkMosaicHasBeenInitialized(locationPath, defaultIndexName)) {
+                        if (!checkMosaicHasBeenInitialized(mosaicDirectory, defaultIndexName)) {
                             return null;
                         }
                     }
@@ -1541,7 +1550,7 @@ public class Utils {
                             updateSourcePath(
                                     sourcePath,
                                     datastoreFound,
-                                    directory,
+                                    mosaicDirectory,
                                     defaultIndexName /* , emptyFile */);
 
                 } else {
@@ -1590,7 +1599,7 @@ public class Utils {
      * @param path
      * @return
      */
-    private static Properties loadPropertiesFromPath(Path path) {
+    public static Properties loadPropertiesFromPath(Path path) {
         Objects.requireNonNull(path);
         Properties properties = new Properties();
         try (InputStream stream = new BufferedInputStream(Files.newInputStream(path))) {
@@ -1691,18 +1700,18 @@ public class Utils {
     }
 
     private static boolean checkMosaicHasBeenInitialized(
-            String locationPath, String defaultIndexName) {
-        File mosaicFile = new File(locationPath, defaultIndexName + ".xml");
+            Path locationPath, String defaultIndexName) {
+        Path mosaicFile = locationPath.resolve(defaultIndexName + ".xml");
         if (Utils.checkFileReadable(mosaicFile)) {
             return true;
         }
-        mosaicFile = new File(locationPath, defaultIndexName + ".properties");
+        mosaicFile = locationPath.resolve(defaultIndexName + ".properties");
         if (Utils.checkFileReadable(mosaicFile)) {
             return true;
         }
 
         // Fallback on empty mosaic check on default indexers
-        File indexFile = new File(locationPath, IndexerUtils.INDEXER_XML);
+        Path indexFile = locationPath.resolve(IndexerUtils.INDEXER_XML);
         if (Utils.checkFileReadable(indexFile)) {
             String canBeEmpty = IndexerUtils.getParameter(Prop.CAN_BE_EMPTY, indexFile);
             if (canBeEmpty != null) {
@@ -1711,10 +1720,9 @@ public class Utils {
                 }
             }
         }
-        indexFile = new File(locationPath, IndexerUtils.INDEXER_PROPERTIES);
+        indexFile = locationPath.resolve(IndexerUtils.INDEXER_PROPERTIES);
         if (Utils.checkFileReadable(indexFile)) {
-            URL url = URLs.fileToUrl(indexFile);
-            final Properties properties = CoverageUtilities.loadPropertiesFromURL(url);
+            final Properties properties = loadPropertiesFromPath(indexFile);
             if (properties != null) {
                 String canBeEmpty = properties.getProperty(Prop.CAN_BE_EMPTY, null);
                 if (canBeEmpty != null) {
