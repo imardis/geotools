@@ -17,6 +17,8 @@
 package org.geotools.gce.imagemosaic.catalog.index;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Properties;
 import java.util.logging.Level;
@@ -321,6 +323,31 @@ public class IndexerUtils {
         if (indexerFile != null && indexerFile.exists()) {
             try {
                 Indexer indexerInstance = Utils.unmarshal(indexerFile);
+                if (indexerInstance != null) {
+                    String value = IndexerUtils.getParameter(parameterName, indexerInstance);
+                    if (value != null) {
+                        return value;
+                    }
+                }
+            } catch (JAXBException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Return the parameter string value of the specified parameter name from the indexer defined in
+     * the specified pat (if exists).
+     *
+     * @param parameterName
+     * @param indexerPath
+     * @return
+     */
+    public static String getParameter(String parameterName, Path indexerPath) {
+        if (indexerPath != null && Files.exists(indexerPath)) {
+            try {
+                Indexer indexerInstance = Utils.unmarshal(indexerPath);
                 if (indexerInstance != null) {
                     String value = IndexerUtils.getParameter(parameterName, indexerInstance);
                     if (value != null) {

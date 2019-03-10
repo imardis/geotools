@@ -22,6 +22,7 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URL;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -563,14 +564,16 @@ public class ImageMosaicReader extends AbstractGridCoverage2DReader
      * @throws DataSourceException
      */
     private void initReaderFromURL(final Object source, final Hints hints) throws Exception {
-        this.sourceURL = Utils.checkSource(source, hints);
+        Path sourcePath = Utils.checkSource(source,hints);
 
         // Preliminary check on source
-        if (this.sourceURL == null) {
+        if (sourcePath == null) {
             throw new DataSourceException(
                     "This plugin accepts File, URL or String. The string may describe a File or an URL");
         }
 
+        //FIXME refactor to use sourcePath
+        sourceURL = URLs.fileToUrl(sourcePath.toFile());
         // Load properties file
         MosaicConfigurationBean configuration = null;
         try {

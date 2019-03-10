@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -388,7 +389,13 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
                 return true;
             }
 
-            URL sourceURL = Utils.checkSource(source, hints);
+            Path sourcePath = Utils.checkSource(source, hints);
+            URL sourceURL = null;
+            //FIXME refactor to use sourcePath
+            if(sourcePath != null){
+                sourceURL = URLs.fileToUrl(sourcePath.toFile());
+
+            }
             if (sourceURL == null) {
                 return false;
             }
@@ -583,6 +590,7 @@ public final class ImageMosaicFormat extends AbstractGridFormat implements Forma
                 LOGGER.log(Level.WARNING, e.getLocalizedMessage(), e);
             return null;
         } catch (IOException e) {
+            e.printStackTrace();
             if (LOGGER.isLoggable(Level.FINE)) LOGGER.log(Level.FINE, e.getLocalizedMessage(), e);
             return null;
         }

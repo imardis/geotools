@@ -39,7 +39,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
-import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -48,15 +47,10 @@ import java.io.OutputStream;
 import java.io.Serializable;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Queue;
-import java.util.Set;
-import java.util.TimeZone;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.imageio.ImageIO;
@@ -354,6 +348,7 @@ public class Utils {
         private File file;
         private URL url;
         private Object source;
+        private Path path;
 
         public SourceGetter(Object inputSource) {
             source = inputSource;
@@ -362,10 +357,12 @@ public class Utils {
             if (source instanceof File) {
                 file = (File) source;
                 url = URLs.fileToUrl(file);
+                path = file.toPath();
             } else if (source instanceof URL) {
                 url = (URL) source;
                 if (url.getProtocol().equals("file")) {
                     file = URLs.urlToFile(url);
+                    path = file.toPath();
                 }
             } else if (source instanceof String) {
                 // is it a File?
@@ -377,13 +374,15 @@ public class Utils {
                         url = new URL(tempSource);
                         file = URLs.urlToFile(url);
                         source = file;
+                        path = file.toPath();
                     } catch (MalformedURLException e) {
                         url = null;
                         source = null;
+                        path = null;
                     }
                 } else {
                     url = URLs.fileToUrl(tempFile);
-
+                    path = tempFile.toPath();
                     // so that we can do our magic here below
                     file = tempFile;
                 }
@@ -403,6 +402,11 @@ public class Utils {
         /** Return the original source object */
         public Object getSource() {
             return source;
+        }
+
+        /** Return the path representing the source */
+        public Path getPath() {
+            return path;
         }
     }
 
@@ -1042,6 +1046,23 @@ public class Utils {
     }
 
     /**
+     * Checks that a {@link Path} is a real file, exists and is readable.
+     *
+     * @param path the {@link Path} instance to check. Must not be null.
+     * @return <code>true</code> in case the Path is a real file, exists and is readable; <code>
+     *     false </code> otherwise.
+     */
+    public static boolean checkFileReadable(final Path path) {
+        if (LOGGER.isLoggable(Level.FINE)) {
+            final String message = getFileInfo(path.toFile());
+            LOGGER.fine(message);
+        }
+        if (!Files.exists(path) || !Files.isReadable(path) || !Files.isRegularFile(path))
+            return false;
+        return true;
+    }
+
+    /**
      * Creates a human readable message that describe the provided {@link File} object in terms of
      * its properties.
      *
@@ -1356,11 +1377,10 @@ public class Utils {
         return params;
     }
 
-    static URL checkSource(Object source, Hints hints) {
+    static Path checkSource(Object source, Hints hints) throws IOException {
 
         SourceGetter sourceGetter = new SourceGetter(source);
-        URL sourceURL = sourceGetter.getUrl();
-        File sourceFile = sourceGetter.getFile();
+        Path sourcePath = sourceGetter.getPath();
 
         //
         // Check source
@@ -1372,16 +1392,13 @@ public class Utils {
         // we could, let's see what we can do
         //
         // //
-        if (sourceFile != null) {
-            if (!sourceFile.isDirectory())
-                // real file, can only be a shapefile at this stage or a
-                // datastore.properties file
-                sourceURL = URLs.fileToUrl(sourceFile);
-            else {
+        if (sourcePath != null) {
+            if (Files.isDirectory(sourcePath)) {
                 // it's a DIRECTORY, let's look for a possible properties files
                 // that we want to load
-                final String locationPath = sourceFile.getAbsolutePath();
-                final String defaultIndexName = getDefaultIndexName(locationPath);
+                final String locationPath = sourcePath.toString();
+                final Path directory = sourcePath;
+                final String defaultIndexName = getDefaultIndexName(sourcePath);
                 boolean datastoreFound = false;
                 boolean buildMosaic = false;
 
@@ -1390,33 +1407,35 @@ public class Utils {
                 // the shapefile
                 // TODO: Refactor these checks once we integrate datastore on indexer.xml
                 //
-                File dataStoreProperties = new File(locationPath, "datastore.properties");
+                Path dataStoreProperties = sourcePath.resolve("datastore.properties");
                 // File emptyFile = new File(locationPath,"empty");
 
                 // this can be used to look for properties files that do NOT
                 // define a datastore
-                final File[] properties =
-                        sourceFile.listFiles(
-                                (FilenameFilter)
-                                        FileFilterUtils.and(
-                                                FileFilterUtils.notFileFilter(
-                                                        FileFilterUtils.nameFileFilter(
-                                                                "datastore.properties")),
-                                                FileFilterUtils.makeFileOnly(
-                                                        FileFilterUtils.suffixFileFilter(
-                                                                ".properties"))));
+                Predicate<Path> notDataStore =
+                        path -> !path.getFileName().toString().equals("datastore.properties");
+                Predicate<Path> isPropertiesFile = path -> path.toString().endsWith(".properties");
+
+                final Path[] properties =
+                        Files.list(sourcePath)
+                                .filter(notDataStore)
+                                .filter(isPropertiesFile)
+                                .toArray(Path[]::new);
 
                 // do we have a valid datastore + mosaic properties pair?
-                if (Utils.checkFileReadable(dataStoreProperties)) {
+                if (checkFileReadable(dataStoreProperties)) {
                     // we have a datastore.properties file
                     datastoreFound = true;
 
                     // check the first valid mosaic properties
                     boolean found = false;
-                    for (File propFile : properties)
-                        if (Utils.checkFileReadable(propFile)) {
+                    for (Path propFile : properties)
+                        if (checkFileReadable(propFile)) {
                             // load it
-                            if (null != Utils.loadMosaicProperties(URLs.fileToUrl(propFile))) {
+                            // fixme refactor loadMosaicProperties
+                            if (null
+                                    != Utils.loadMosaicProperties(
+                                            URLs.fileToUrl(propFile.toFile()))) {
                                 found = true;
                                 break;
                             }
@@ -1436,21 +1455,22 @@ public class Utils {
                 //
                 // now let's try with shapefile and properties couple
                 //
-                File shapeFile = null;
+                Path shapeFile = null;
                 if (!datastoreFound) {
-                    for (File propFile : properties) {
+                    for (Path propFile : properties) {
 
                         // load properties
-                        if (null == Utils.loadMosaicProperties(URLs.fileToUrl(propFile))) continue;
+                        if (null == Utils.loadMosaicProperties(URLs.fileToUrl(propFile.toFile())))
+                            continue;
 
                         // look for a couple shapefile, mosaic properties file
                         shapeFile =
-                                new File(
-                                        locationPath,
-                                        FilenameUtils.getBaseName(propFile.getName()) + ".shp");
-                        if (!Utils.checkFileReadable(shapeFile)
-                                && Utils.checkFileReadable(propFile)) buildMosaic = true;
-                        else {
+                                directory.resolve(
+                                        FilenameUtils.getBaseName(propFile.getFileName().toString())
+                                                + ".shp");
+                        if (!checkFileReadable(shapeFile) && checkFileReadable(propFile)) {
+                            buildMosaic = true;
+                        } else {
                             buildMosaic = false;
                             break;
                         }
@@ -1467,11 +1487,11 @@ public class Utils {
                     // try to build a mosaic inside this directory and see what
                     // happens
 
-                    // preliminar checks
-                    final File mosaicDirectory = new File(locationPath);
-                    if (!mosaicDirectory.exists()
-                            || mosaicDirectory.isFile()
-                            || !mosaicDirectory.canWrite()) {
+                    // preliminary checks
+                    final Path mosaicDirectory = directory;
+                    if (!Files.exists(mosaicDirectory)
+                            || Files.isRegularFile(mosaicDirectory)
+                            || !Files.isWritable(mosaicDirectory)) {
                         if (LOGGER.isLoggable(Level.SEVERE)) {
                             LOGGER.log(
                                     Level.SEVERE,
@@ -1480,19 +1500,19 @@ public class Utils {
                                             + locationPath
                                             + "\n"
                                             + "location exists:"
-                                            + mosaicDirectory.exists()
+                                            + Files.exists(mosaicDirectory)
                                             + "\n"
                                             + "location is a directory:"
-                                            + mosaicDirectory.isDirectory()
+                                            + Files.isDirectory(mosaicDirectory)
                                             + "\n"
                                             + "location is writable:"
-                                            + mosaicDirectory.canWrite()
+                                            + Files.isWritable(mosaicDirectory)
                                             + "\n"
                                             + "location is readable:"
-                                            + mosaicDirectory.canRead()
+                                            + Files.isReadable(mosaicDirectory)
                                             + "\n"
                                             + "location is hidden:"
-                                            + mosaicDirectory.isHidden()
+                                            + Files.isHidden(mosaicDirectory)
                                             + "\n");
                         }
                         return null;
@@ -1507,60 +1527,54 @@ public class Utils {
                             hints);
 
                     // check that the mosaic properties file was created
-                    final File propertiesFile =
-                            new File(locationPath, defaultIndexName + ".properties");
-                    if (!Utils.checkFileReadable(propertiesFile)) {
+                    final Path propertiesFile = directory.resolve(defaultIndexName + ".properties");
+                    if (!checkFileReadable(propertiesFile)) {
                         // retrieve a null so that we shows that a problem occurred
                         if (!checkMosaicHasBeenInitialized(locationPath, defaultIndexName)) {
-                            sourceURL = null;
-                            return sourceURL;
+                            return null;
                         }
                     }
 
                     // check that the shapefile was correctly created in case it
                     // was needed
-                    sourceURL =
-                            updateSourceURL(
-                                    sourceURL,
+                    sourcePath =
+                            updateSourcePath(
+                                    sourcePath,
                                     datastoreFound,
-                                    locationPath,
+                                    directory,
                                     defaultIndexName /* , emptyFile */);
 
-                } else
+                } else {
                     // now set the new source and proceed
-                    sourceURL =
-                            datastoreFound
-                                    ? URLs.fileToUrl(dataStoreProperties)
-                                    : URLs.fileToUrl(shapeFile);
+                    sourcePath = datastoreFound ? dataStoreProperties : shapeFile;
+                }
             }
         }
-        return sourceURL;
+        return sourcePath;
     }
 
-    private static String getDefaultIndexName(final String locationPath) {
+    private static String getDefaultIndexName(final Path locationPath) {
         String name = getIndexerProperty(locationPath, Utils.Prop.NAME);
         if (name != null) {
             return name;
         }
 
-        return FilenameUtils.getName(locationPath);
+        return FilenameUtils.getName(locationPath.toAbsolutePath().toString());
     }
 
-    public static String getIndexerProperty(String locationPath, String propertyName) {
+    public static String getIndexerProperty(Path locationPath, String propertyName) {
         if (locationPath == null) {
             return null;
         }
-        File file = new File(locationPath);
-        if (file.isDirectory()) {
-            File indexer = new File(file, IndexerUtils.INDEXER_PROPERTIES);
-            if (indexer.exists()) {
-                URL indexerUrl = URLs.fileToUrl(indexer);
-                Properties config = CoverageUtilities.loadPropertiesFromURL(indexerUrl);
+        if (Files.isDirectory(locationPath)) {
+            Path indexer = locationPath.resolve(IndexerUtils.INDEXER_PROPERTIES);
+            if (Files.exists(indexer)) {
+                Properties config = loadPropertiesFromPath(indexer);
                 if (config != null && config.get(Utils.Prop.NAME) != null) {
                     return (String) config.get(propertyName);
                 }
             }
-            indexer = new File(file, IndexerUtils.INDEXER_XML);
+            indexer = locationPath.resolve(IndexerUtils.INDEXER_XML);
             String name = IndexerUtils.getParameter(Utils.Prop.NAME, indexer);
             if (name != null) {
                 return name;
@@ -1571,13 +1585,32 @@ public class Utils {
     }
 
     /**
+     * fixme maybe move this to somewhere better
+     *
+     * @param path
+     * @return
+     */
+    private static Properties loadPropertiesFromPath(Path path) {
+        Objects.requireNonNull(path);
+        Properties properties = new Properties();
+        try (InputStream stream = new BufferedInputStream(Files.newInputStream(path))) {
+            properties.load(stream);
+            return properties;
+        } catch (IOException var11) {
+            if (LOGGER.isLoggable(Level.SEVERE)) {
+                LOGGER.log(Level.SEVERE, var11.getLocalizedMessage(), var11);
+            }
+            return null;
+        }
+    }
+
+    /**
      * Look for a proper sourceURL to be returned.
      *
-     * @param sourceURL
+     * @param sourcePath
      * @param datastoreFound
      * @param locationPath
      * @param defaultIndexName
-     * @param emptyFile
      * @return
      */
     private static URL updateSourceURL(
@@ -1612,6 +1645,49 @@ public class Utils {
         }
 
         return sourceURL;
+    }
+
+    /**
+     * Look for a proper sourceURL to be returned.
+     *
+     * @param sourcePath
+     * @param datastoreFound
+     * @param locationPath
+     * @param defaultIndexName
+     * @return
+     */
+    private static Path updateSourcePath(
+            Path sourcePath,
+            boolean datastoreFound,
+            Path locationPath,
+            String defaultIndexName /*
+     * , File emptyFile
+     */) {
+        if (!datastoreFound) {
+            Path shapeFile = locationPath.resolve(defaultIndexName + ".shp");
+
+            if (!Utils.checkFileReadable(shapeFile)) {
+                // if (!Utils.checkFileReadable(emptyFile)) {
+                sourcePath = null;
+                // } else {
+                // sourceURL = URLs.fileToUrl(emptyFile);
+                // }
+            } else {
+                // now set the new source and proceed
+                sourcePath = shapeFile;
+            }
+        } else {
+            Path dataStoreProperties = locationPath.resolve("datastore.properties");
+
+            // datastore.properties as the source
+            if (!Utils.checkFileReadable(dataStoreProperties)) {
+                sourcePath = null;
+            } else {
+                sourcePath = dataStoreProperties;
+            }
+        }
+
+        return sourcePath;
     }
 
     private static boolean checkMosaicHasBeenInitialized(
@@ -2061,6 +2137,28 @@ public class Utils {
             unmarshaller = CONTEXT.createUnmarshaller();
             indexer = (Indexer) unmarshaller.unmarshal(indexerFile);
         }
+        return indexer;
+    }
+
+    /**
+     * Unmarshal the file and return and Indexer object.
+     *
+     * @param indexerFile
+     * @return
+     * @throws JAXBException
+     */
+    public static Indexer unmarshal(Path indexerFile) throws JAXBException {
+        Unmarshaller unmarshaller;
+        Indexer indexer = null;
+        if (indexerFile != null) {
+            try (InputStream inputStream = Files.newInputStream(indexerFile)) {
+                unmarshaller = CONTEXT.createUnmarshaller();
+                indexer = (Indexer) unmarshaller.unmarshal(inputStream);
+            } catch (IOException e) {
+
+            }
+        }
+
         return indexer;
     }
 
